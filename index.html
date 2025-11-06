@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sistem Stok Barang (Realtime + Firebase Auth)</title>
+<style>
+body { font-family: Arial; margin: 20px; background: #f5f6fa; }
+h2,h3 { color:#2f3640; }
+form, table, .filter-section, .laporan, .login-box {
+  background:white; padding:15px; border-radius:8px;
+  box-shadow:0 2px 5px rgba(0,0,0,0.1); margin-bottom:20px;
+}
+input, select { padding:8px; margin:5px; border-radius:5px; border:1px solid #ccc; }
+button { padding:6px 10px; border:none; border-radius:5px; cursor:pointer; color:white; margin:2px; }
+button.add { background:#44bd32; }
+button.export { background:#273c75; }
+button.reset { background:#e84118; }
+button.login { background:#40739e; }
+button.logout { background:#e1b12c; color:black; }
+button.edit { background:#00a8ff; }
+button.hapus { background:#e84118; }
+table { width:100%; border-collapse:collapse; }
+th, td { border:1px solid #ddd; padding:8px; text-align:center; }
+th { background:#718093; color:white; }
+.search-box { margin-bottom:10px; }
+#adminStatus { font-weight:bold; color:#273c75; margin-bottom:10px; }
+</style>
+</head>
+<body>
+
+<h2>Sistem Stok Barang Realtime (Firebase)</h2>
+
+<!-- LOGIN -->
+<div id="loginSection" class="login-box">
+  <h3>Login Admin</h3>
+  <input type="email" id="loginUser" placeholder="Email" />
+  <input type="password" id="loginPass" placeholder="Password" />
+  <button class="login" onclick="login()">Login</button>
+</div>
+
+<div id="appSection" style="display:none;">
+  <p id="adminStatus"></p>
+  <button class="logout" onclick="logout()">Logout</button>
+
+  <!-- FORM INPUT -->
+  <form id="formBarang">
+    <input type="text" id="kode" placeholder="Kode Barang" required />
+    <input type="text" id="nama" placeholder="Nama Barang" required />
+    <input type="number" id="masuk" placeholder="Stok Masuk" value="0" />
+    <input type="number" id="keluar" placeholder="Stok Keluar" value="0" />
+    <input type="text" id="keterangan" placeholder="Keterangan" />
+    <input type="date" id="tanggal" required />
+    <button type="submit" class="add">Tambah / Update</button>
+  </form>
+
+  <!-- FILTER -->
+  <div class="filter-section">
+    <input type="text" id="search" class="search-box" placeholder="Cari nama atau kode barang..." />
+    <br />
+    <label>Dari: <input type="date" id="filterFrom"></label>
+    <label>Sampai: <input type="date" id="filterTo"></label>
+    <button onclick="applyFilter()">Terapkan Filter</button>
+    <button onclick="resetFilter()">Reset Filter</button>
+  </div>
+
+  <button class="export" onclick="exportCSV()">Export ke CSV</button>
+  <button class="reset" id="btnReset" onclick="resetData()">Hapus Semua Data</button>
+
+  <table id="tabelBarang">
+    <thead>
+      <tr>
+        <th>Kode Barang</th>
+        <th>Nama Barang</th>
+        <th>Stok Masuk</th>
+        <th>Stok Keluar</th>
+        <th>Sisa Stok</th>
+        <th>Keterangan</th>
+        <th>Tanggal</th>
+        <th>Aksi</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div class="laporan">
+    <h3>Laporan Bulanan</h3>
+    <select id="bulanLaporan"></select>
+    <button onclick="tampilkanLaporan()">Tampilkan Laporan</button>
+    <div id="hasilLaporan"></div>
+  </div>
+</div>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics-compat.js"></script>
+
+<script>
+// === KONFIGURASI FIREBASE ===
+const firebaseConfig = {
+  apiKey: "AIzaSyA0Gc63tXJyiOGzU5BusTQnINvHhW7Zy7w",
+  authDomain: "stok-opnime.firebaseapp.com",
+  databaseURL: "https://stok-opnime-default-rtdb.firebaseio.com/",
+  projectId: "stok-opnime",
+  storageBucket: "stok-opnime.firebasestorage.app",
+  messagingSenderId: "806000738027",
+  appId: "1:806000738027:web:fd0451765161b1979a48ae",
+  measurementId: "G-TW2E35SVYB"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const auth = firebase.auth();
+
+// === VARIABEL ===
+let dataBarang = [];
+let isAdmin = false;
+const form = document.getElementById("formBarang");
+const tbody = document.querySelector("#tabelBarang tbody");
+const search = document.getElementById("search");
+const bulanSelect = document.getElementById("bulanLaporan");
+const adminStatus = document.getElementById("adminStatus");
+const btnReset = document.getElementById("btnReset");
+
+// === LOGIN / LOGOUT ===
+function login(){
+  const email = document.getElementById("loginUser").value;
+  const pass = document.getElementById("loginPass").value;
+  auth.signInWithEmailAndPassword(email, pass)
+    .then(()=>{
+      alert("Login berhasil!");
+      isAdmin = true;
+      renderPage();
+    })
+    .catch(err=>{
+      alert("Login gagal: " + err.message);
+    });
+}
+
+function logout(){
+  auth.signOut().then(()=>{
+    alert("Logout berhasil!");
+    isAdmin = false;
+    renderPage();
+  });
+}
+
+// === CEK STATUS LOGIN ===
+auth.onAuthStateChanged(user=>{
+  isAdmin = !!user;
+  renderPage();
+});
+
+// === BACA DATA REALTIME ===
+function loadData(){
+  db.ref("barang").on("value", snapshot=>{
+    dataBarang = [];
+    snapshot.forEach(snap=> dataBarang.push(snap.val()));
+    renderTabel();
+  });
+}
+
+// === RENDER HALAMAN ===
+function renderPage(){
+  document.getElementById("loginSection").style.display = isAdmin ? "none":"block";
+  document.getElementById("appSection").style.display = "block";
+  adminStatus.innerHTML = isAdmin ? "Mode: Admin (boleh edit/hapus)" : "Mode: Viewer (lihat saja)";
+  form.querySelectorAll("input, button").forEach(el=>el.disabled=!isAdmin);
+  btnReset.disabled = !isAdmin;
+  renderTabel();
+}
+
+// === TABEL ===
+function renderTabel(data=dataBarang){
+  tbody.innerHTML = "";
+  data.forEach(item=>{
+    const row=document.createElement("tr");
+    row.innerHTML=`
+      <td>${item.kode}</td>
+      <td>${item.nama}</td>
+      <td>${item.masuk}</td>
+      <td>${item.keluar}</td>
+      <td>${item.masuk - item.keluar}</td>
+      <td>${item.keterangan||""}</td>
+      <td>${item.tanggal}</td>
+      <td>
+        <button class="edit" onclick="editItem('${item.kode}')" ${!isAdmin?'disabled':''}>Edit</button>
+        <button class="hapus" onclick="hapusItem('${item.kode}')" ${!isAdmin?'disabled':''}>Hapus</button>
+      </td>`;
+    tbody.appendChild(row);
+  });
+}
+
+// === TAMBAH / UPDATE ===
+form.addEventListener("submit", e=>{
+  e.preventDefault();
+  if(!isAdmin) return alert("Hanya admin yang bisa mengedit data!");
+  const item = {
+    kode: document.getElementById("kode").value.trim(),
+    nama: document.getElementById("nama").value.trim(),
+    masuk: parseInt(document.getElementById("masuk").value)||0,
+    keluar: parseInt(document.getElementById("keluar").value)||0,
+    keterangan: document.getElementById("keterangan").value.trim(),
+    tanggal: document.getElementById("tanggal").value
+  };
+  db.ref("barang/"+item.kode).set(item);
+  form.reset();
+});
+
+// === EDIT / HAPUS ===
+function editItem(kode){
+  const item=dataBarang.find(b=>b.kode===kode);
+  if(!item) return;
+  document.getElementById("kode").value=item.kode;
+  document.getElementById("nama").value=item.nama;
+  document.getElementById("masuk").value=item.masuk;
+  document.getElementById("keluar").value=item.keluar;
+  document.getElementById("keterangan").value=item.keterangan;
+  document.getElementById("tanggal").value=item.tanggal;
+}
+function hapusItem(kode){
+  if(!isAdmin) return alert("Hanya admin yang bisa hapus!");
+  if(confirm("Yakin hapus item ini?")) db.ref("barang/"+kode).remove();
+}
+function resetData(){
+  if(!isAdmin) return alert("Hanya admin yang bisa hapus semua data!");
+  if(confirm("Hapus semua data?")) db.ref("barang").remove();
+}
+
+// === FILTER & SEARCH ===
+search.addEventListener("input",()=>{
+  const val=search.value.toLowerCase();
+  const filtered=dataBarang.filter(b=>b.nama.toLowerCase().includes(val)||b.kode.toLowerCase().includes(val));
+  renderTabel(filtered);
+});
+function applyFilter(){
+  const from=document.getElementById("filterFrom").value;
+  const to=document.getElementById("filterTo").value;
+  const filtered=dataBarang.filter(b=>{
+    const t=new Date(b.tanggal);
+    return (!from || t>=new Date(from)) && (!to || t<=new Date(to));
+  });
+  renderTabel(filtered);
+}
+function resetFilter(){
+  document.getElementById("filterFrom").value="";
+  document.getElementById("filterTo").value="";
+  renderTabel();
+}
+
+// === EXPORT CSV ===
+function exportCSV(){
+  if(dataBarang.length===0) return alert("Tidak ada data!");
+  let csv="Kode,Nama,Masuk,Keluar,Sisa,Keterangan,Tanggal\n";
+  dataBarang.forEach(b=>{
+    csv+=`${b.kode},${b.nama},${b.masuk},${b.keluar},${b.masuk-b.keluar},${b.keterangan},${b.tanggal}\n`;
+  });
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+  const link=document.createElement("a");
+  link.href=URL.createObjectURL(blob);
+  link.download="stok_firebase.csv";
+  link.click();
+}
+
+// === LAPORAN BULANAN ===
+const bulanNama=["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+bulanNama.forEach((b,i)=>{
+  const opt=document.createElement("option");
+  opt.value=i+1; opt.text=b;
+  bulanSelect.appendChild(opt);
+});
+function tampilkanLaporan(){
+  const bulan=parseInt(bulanSelect.value);
+  const hasil=document.getElementById("hasilLaporan");
+  const filtered=dataBarang.filter(b=>new Date(b.tanggal).getMonth()+1===bulan);
+  if(filtered.length===0){
+    hasil.innerHTML=`<p>Tidak ada data untuk bulan ${bulanNama[bulan-1]}.</p>`;
+    return;
+  }
+  let totalMasuk=0,totalKeluar=0;
+  filtered.forEach(b=>{totalMasuk+=b.masuk; totalKeluar+=b.keluar;});
+  hasil.innerHTML=`
+    <p><b>Bulan:</b> ${bulanNama[bulan-1]}</p>
+    <p><b>Total Masuk:</b> ${totalMasuk}</p>
+    <p><b>Total Keluar:</b> ${totalKeluar}</p>
+    <p><b>Sisa Bersih:</b> ${totalMasuk-totalKeluar}</p>`;
+}
+
+// === INISIALISASI ===
+loadData();
+</script>
+</body>
+</html>
